@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# Define the file containing the list of HDFS paths to delete
+TABLE_LIST_FILE="table_list.txt"
+
+# Check if the table list file exists
+if [ ! -f "$TABLE_LIST_FILE" ]; then
+  echo "Error: Path list file '$TABLE_LIST_FILE' not found!"
+  echo "Please create a file named '$TABLE_LIST_FILE' with one HDFS path per line."
+  exit 1
+fi
+
+echo "Starting HDFS path deletion from provided list..."
+
+# Read each HDFS path from the file and execute hdfs dfs -rm -r
+deleted_count=0
+skipped_count=0
+line_number=0
+
+while IFS= read -r hdfs_path; do
+  ((line_number++))
+  
+  # 去除前后空格和制表符
+  hdfs_path=$(echo "$hdfs_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  
+  # 跳过空行
+  if [ -z "$hdfs_path" ]; then
+    echo "Line $line_number: Empty line - skipping"
+    ((skipped_count++))
+    echo "------------------------------------"
+    continue
+  fi
+  
+  # 安全检查：确保路径以 hdfs:// 或 / 开头
+  if [[ ! "$hdfs_path" =~ ^(hdfs://|/) ]]; then
+    echo "Line $line_number: Invalid HDFS path '$hdfs_path' - must start with 'hdfs://' or '/'"
+    ((skipped_count++))
+    echo "------------------------------------"
+    continue
+  fi
+  
+  # 安全检查：防止删除根目录或危险路径
+  if [ "$hdfs_path" = "/" ] || [ "$hdfs_path" = "hdfs://" ]; then
+    echo "Line $line_number: DANGEROUS - Attempting to delete root directory '$hdfs_path' - SKIPPING!"
+    ((skipped_count++))
+    echo "------------------------------------"
+    continue
+  fi
+  
+  # 安全检查：路径不能包含 .. 
+  if [[ "$hdfs_path" =~ \.\. ]]; then
+    echo "Line $line_number: Path contains '..' - potential directory traversal attack - SKIPPING!"
+    ((skipped_count++))
+    echo "------------------------------------"
+    continue
+  fi
+  
+  # 只有通过了所有安全检查，才执行删除操作
+  echo "Line $line_number: Deleting HDFS path: $hdfs_path"
+  hdfs dfs -rm -r "$hdfs_path"
+  if [ $? -eq 0 ]; then
+    echo "Line $line_number: Path $hdfs_path deleted successfully."
+    ((deleted_count++))
+  else
+    echo "Line $line_number: Failed to delete path $hdfs_path."
+  fi
+  echo "------------------------------------"
+  
+done < "$TABLE_LIST_FILE"
+
+echo "HDFS path deletion completed."
+echo "Summary: Total paths processed: $line_number, Successfully deleted: $deleted_count, Skipped: $skipped_count"
